@@ -1,0 +1,381 @@
+---
+title             : "Analyzing Factors and Predictive Modeling for ZRX to USD Exchange Rate Fluctuations"
+shorttitle        : "STAT429 final project"
+
+author: 
+  - name          : "Chloe Yang"
+    affiliation   : "department of statistics"
+    email         : "junkey2@illinois.edu"
+    role: # Contributorship roles (e.g., CRediT, https://credit.niso.org/)
+      - "Modelling - time + trading value + buying price"
+      - "Writing - Original Draft Preparation"
+  - name          : "Jinghe Shen"
+    affiliation   : "department of statistics"
+    email         : "jinghes2@illinois.edu"
+    role:
+      - "Final Model Selection and Forecasting"
+      - "Designing Slides - Original Draft Preparation"
+  - name          : "Ziqi Xu"
+    affiliation   : "department of statistics"
+    email         : "ziqi12@illinois.edu"
+    role:
+      - "Modelling - time + trading value + selling price"
+      - "Designing Slides - Original Draft Preparation"
+
+affiliation:
+  - id            : "1"
+    institution   : "UIUC"
+
+
+authornote: |
+
+
+abstract: |
+  This study aims to discover the factors behind ZRX to USD exchange rate fluctuations, utilizing regression analysis and market indicators beyond temporal variables, to enhance forecasting accuracy in the cryptocurrency market.\
+  The main result of the study is the identification of using three significant predictors, selling price, stock volume, and trading date which contribute ZRX to USD exchange rate movements. This finding challenges previous assumptions by demonstrating that factors such as trading volumes and buying or selling activities play a more substantial role in exchange rate dynamics. It adds to existing knowledge by highlighting the need for considering multiple market indicators to achieve accurate exchange rate forecasting.\
+  In the broader context of financial markets and digital assets, understanding the intricate interactions between market indicators and exchange rates is crucial for informed decision-making and risk management strategies. The prediction we made based on our selected model shows a trend of decreasing of ZRX to USD exchange rate in the next few trading days.\
+  The approach of this study highlights the interdisciplinary nature of predictive modeling, emphasizing the importance of combining different data sources and analytical techniques to make robust predictions, which is a principle that applies across scientific disciplines seeking predictive insights from complex datasets.\
+
+
+
+bibliography      : "r-references.bib"
+
+floatsintext      : no
+linenumbers       : yes
+draft             : no
+mask              : no
+
+figurelist        : no
+tablelist         : no
+footnotelist      : no
+
+classoption       : "man"
+output            : papaja::apa6_pdf
+---
+
+```{r setup, include = FALSE}
+library("papaja")
+r_refs("r-references.bib")
+library(astsa)
+library(ggplot2)
+library(ggfortify)
+library(fpp2)
+library(dplyr)
+library(tseries)
+library(knitr)
+library(forecast)
+library(tseries)
+library(lubridate)
+knitr::opts_chunk$set(warning = FALSE)
+```
+
+```{r analysis-preferences}
+# Seed for random number generation
+set.seed(42)
+knitr::opts_chunk$set(cache.extra = knitr::rand_seed,fig.height = 3)
+```
+
+# Introduction
+
+Given that 0x Protocol (ZRX), a cryptocurrency, plays a protocol role in open-source infrastructure enabling the decentralized exchange of ERC20 tokens across various blockchains, the ZRX to USD exchange rate reflects the market dynamics and trading activities surrounding this protocol.\
+ 
+Launched in late 2017, ZRX has experienced an inflation emission with a 1,000,000,000 supply [@barbereau]. Traders hold ZRX tokens as an investment, monitoring the ZRX to USD rate closely to make more informed decisions to pursue larger profits. Moreover, ZRX is used in various Decentralized Finance (DeFi) transactions[@Nadler]. Users may need to convert ZRX to USD or vice versa when interacting with these platforms, making the exchange rate important [@Chu].\
+
+This analysis seeks to explore the determinants of the exchange rate from ZRX to USD using regression analysis, incorporating multiple independent variables beyond time alone. The data of the ZRX to USD ($) cryptocurrency pair from 2023-1-1 to 2024-02-27 obtained from the official BITFINEX website is used in this analysis. This data includes exchange rate metrics such as daily highs and lows, average prices, last traded rates, and buying/selling prices. The aim of the study is to identify significant predictors of change rate movements and forecast future rates with enhanced accuracy.\
+
+
+# Methods
+
+## Data
+Here is the column definition of the data:
+```{r}
+tb <- data.frame(
+  Column = c("code", "date", "high", "low", "mid", "last", "bid", "ask", "volume"),
+  Description = c("Unique cryptocurrency exchange pair identifier", "Date of record", "Highest daily price", "Lowest daily price", "Average daily price", "Last traded price", "Buying price at end of day", "Selling price at end of day", "Trading volume at end of day"),
+  Type = c("String", "Date", "Double", "Double", "Double", "Double", "Double", "Double", "Double")
+)
+
+# Print the table using knitr::kable
+knitr::kable(tb)
+```
+We are using `mid` (Average Daily Price) as response variable, and `time` (Date of record), `volume` (Trading volume at end of day), and  `bid` / `ask` (Buying/Selling price at end of day) as predictor.\
+
+## Preliminary Analysis
+```{r include=FALSE}
+data <- read.csv("ZRXUSD.csv")
+data$date <- as.Date(data$date, format="%m/%d/%y")
+data = na.omit(data) #deleting extra rows
+```
+
+```{r echo=FALSE}
+ggplot(data, aes(x = date, y = mid)) +
+  geom_line() + 
+  labs(title = "Daily Average Value", x = "Date", y = "Average Value") +
+  theme_minimal()
+```
+The daily time series plot displays the fluctuations in average value over time on a daily basis, beginning from 2023-1-1 to 2024-02-27. The pattern suggests non-stationarity due to the changes in mean and variance over time, highlighting periods of potential market events or external influences impacting daily values.\
+
+```{r echo=FALSE}
+data$year_month <- format(data$date, "%Y-%m")
+
+monthly_data <- data %>%
+  group_by(year_month) %>%
+  summarise(average_month_mid = mean(mid))
+
+ggplot(monthly_data, aes(x = year_month, y = average_month_mid, group=1)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Monthly Average Value", x = "Year-Month", y = "Average Value") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+The plot shows the monthly average value plot traces the average value across several months, starting from January in the year 2023 to February of 2024. This representation smooths out the daily fluctuations seen in the first graph, providing a clearer view of the longer-term trend and potential seasonality. Initially, there is a dramatic decrease followed by a trough, after which the average values oscillate at a lower level with some upward movement towards the middle of the timeline.\
+
+```{r echo=FALSE}
+# Calculate the differences
+data$diff_mid = c(NA, diff(data$mid))  # Adding NA for the first element because diff() returns one less element
+
+# Check if the differenced data is stationary
+# Removing NA values before the test
+data_no_na = na.omit(data$diff_mid)
+
+# Plotting the differences
+ggplot(data, aes(x = date, y = diff_mid)) +
+  geom_line() + 
+  labs(title = "Daily Changes in Time Series", x = "Date", y = "Day-to-Day Change") +
+  theme_minimal()
+```
+
+```{r include=FALSE}
+# Perform the Augmented Dickey-Fuller test
+adf_result = adf.test(data_no_na, alternative = "stationary")
+
+# Print the results of the test
+print(adf_result)
+```
+Then we tried differencing method on the ZRX to USD data. By differencing, the the daily changes in the ZRX to USD exchange rate plot seems stationary as it shows constant expectation and variance over time. Additionally, the Augmented Dickey-Fuller test yielded a test statistic of -9.074 and a p-value of 0.01. The test's alternative hypothesis suggests stationarity, indicating that the differenced data is stationary.
+
+
+# Regression Analysis
+
+## Model 1: time + trading value + buying price
+```{r include=FALSE}
+model_1 <- lm(mid ~ date + bid + volume, data = data)
+summary(model_1)
+```
+From the **Model 1**,we find the predictors' p-value are all lower than 0.05, indicating their significant contribution to the daily average price of ZRX to USD.\
+* The estimate parameter of date -3.540e-07 indicates a significant negative relationship between date and mid, suggesting that as time progresses, the average daily price decreases.\
+* The estimate parameter of bid 1.000e+00  indicates a strong positive relationship between bid (buying price at the end of the day) and mid, indicating that higher buying prices are associated with higher average daily prices.\
+* The estimate parameter of volume 6.276e-11 indicates a significant but very small positive relationship between volume (trading volume at the end of the day) and mid, suggesting that higher trading volumes are associated with slightly higher average daily prices.\
+Additionally, the F-statistic of 4.32e+07 indicate that the model explains all the variability in the response variable and is highly significant.
+Then we run diagnostic on the **Model 1**:
+```{r include=FALSE}
+summary(aov(model_1))
+```
+
+```{r echo=FALSE}
+checkresiduals(model_1, test = "LB")
+```
+
+```{r include=FALSE}
+plot(model_1$fitted.values, model_1$residuals)
+```
+
+```{r include=FALSE}
+Box.test(model_1$residuals, lag = 10, type = c("Box-Pierce"))
+```
+From the plot above, we can see for **Model 1**:\
+*The plot of residuals does not show a constant trend, and it fluctuates around 0. \
+*For the ACF plot, there are spikes out of the required limits, meaning that the residuals have some remaining autocorrelation. It suggests that there may be temporal dependencies or patterns in the residuals, violating the assumption of independent residuals.\
+*The histogram shows that the residuals are not normally distributed with right skewed peak values, indicating that the residuals' distribution is not symmetric around zero, violating the assumption of normally distributed residuals.\
+*The p-value of Ljung-Box test is 2.2e-16 < 0.05, so we can reject $H_0$ and conclude we have enough evidence to show that the residuals are dependent.\
+
+We consider using models that account for autocorrelated errors such as autoregressive integrated moving average (ARIMA) model.\
+By the residuals plot, it does not seems stationary with an increasing then decreasing trend.\
+
+```{r include=FALSE}
+plot(model_1$residuals)
+```
+It is not stationary as it shows an increasing then decreasing trend. So we tried differencing the residuals.
+
+```{r echo=FALSE}
+plot(diff(model_1$residuals))
+diff_residual = diff(model_1$residuals)
+```
+It now seems to have a constant mean and the variance is independent from t, so it is stationary now.\
+
+```{r echo=FALSE}
+par(mfrow = c(1, 2))
+acf_plot <- acf(diff_residual, main = "ACF Plot for Residuals", lag.max = 20)
+pacf_plot <- Pacf(diff_residual, main = "PACF Plot for Residuals", lag.max = 20)
+```
+From the plot we can see that the PACF plot is tailing off and ACF plot cutts off at lag 1. This is an MA(1) process.\
+For parameter estimation, $p = 0, q = 1, d = 1$ for the residuals, so the ARIMA for residual would be `ARIMA(0,1,1)`\
+
+```{r include=FALSE}
+arima(model_1$residuals, c(p = 0, q= 1, d = 1))
+```
+Now we need to integerate the ARIMA residual into our regression model:\
+
+```{r echo=FALSE}
+model_1_1 = arima(data$mid, c(0, 1, 1), xreg = cbind(data$date, data$bid, data$volume))
+checkresiduals(model_1_1)
+```
+From the plot above, we can see:\
+The plot of residuals does not show a constant trend, and it fluctuates around 0. (though with some outliers) \
+For the ACF plot, there are very few spikes out of the required limits, meaning that the residuals almost have no autocorrelation.\
+The histogram shows that the residuals are normally distributed.\ 
+The p-value of Ljung-Box test is 0.4642 > 0.05, so we fail reject $H_0$ and conclude that there are no obvious correlation between residuals.\
+The model with auto correlated errors (**Model 1.1**) satisfy the white noise assumption of following $N(0, \sigma^2_w)$, the residual diagnostics perform much better than the original (**Model 1**).
+
+## Model 2: time + trading volume + selling price
+```{r include=FALSE}
+model_2 <- lm(mid ~ date + ask + volume, data = data)
+summary(model_2)
+```
+From the **Model 2**,we find the predictors' p-value are all lower than 0.05, indicating their significant contribution to the daily average price of ZRX to USD.\
+* The estimate parameter of date 3.571e-07 indicates significant positive relationship between date and mid, suggesting that as time progresses, the average daily price increases.\
+* The estimate parameter of ask 9.996e-01 indicates strong positive relationship between ask (selling price at the end of the day) and mid, indicating that higher selling prices are associated with higher average daily prices.\
+* The estimate parameter of volume -6.214e-11 indicates significant but very small negative relationship between volume (trading volume at the end of the day) and mid, suggesting that higher trading volumes are associated with slightly lower average daily prices.\
+Additionally, the F-statistic of 4.32e+07 indicate that the model explains all the variability in the response variable and is highly significant.\
+
+```{r include=FALSE}
+summary(aov(model_2))
+```
+
+```{r echo=FALSE}
+checkresiduals(model_2, test = "LB")
+```
+
+```{r include=FALSE}
+plot(model_2$fitted.values, model_2$residuals)
+```
+From the plot above, we can see for **Model 2**:\
+*The plot of residuals does not show a constant trend, and it fluctuates around 0. \
+*For the ACF plot, there are spikes out of the required limits, meaning that the residuals have some remaining autocorrelation. It suggests that there may be temporal dependencies or patterns in the residuals, violating the assumption of independent residuals.\
+*The histogram shows that the residuals are not normally distributed with left skewed peak values, indicating that the residuals' distribution is not symmetric around zero, violating the assumption of normally distributed residuals.\
+*The p-value of Ljung-Box test is 2.2e-16 < 0.05, so we can reject $H_0$ and conclude we have enough evidence to show that the residuals are dependent.\
+We consider using models that account for autocorrelated errors such as autoregressive integrated moving average (ARIMA) model.\
+By the residuals plot, it does not seems stationary with an increasing then decreasing trend.\
+
+```{r include=FALSE}
+plot(model_2$residuals)
+```
+It is not stationary as it shows an decreasing then increasing trend. So we tried differencing the residuals.
+
+```{r}
+plot(diff(model_2$residuals))
+diff_residual = diff(model_2$residuals)
+```
+It now seems to have a constant mean and the variance is independent from t, so it is stationary now.\
+
+```{r}
+par(mfrow = c(1, 2))
+acf_plot <- acf(diff_residual, main = "ACF Plot for Residuals", lag.max = 20)
+pacf_plot <- Pacf(diff_residual, main = "PACF Plot for Residuals", lag.max = 20)
+```
+From the plot we can see that the PACF plot is tailing off and ACF plot cutts off at lag 1. This is an MA(1) process.\
+For parameter estimation, $p = 0, q = 1, d = 1$ for the residuals.\
+So the ARIMA for residual would be `ARIMA(0,1,1)`.\
+
+```{r}
+arima(model_2$residuals, c(p = 0, q= 1, d = 1))
+```
+Now we need to ingerate the ARIMA residual into our regression model:\
+
+```{r}
+model_2_1 = arima(data$mid, c(0, 1, 1), xreg = cbind(data$date, data$ask, data$volume))
+checkresiduals(model_2_1)
+```
+From the plot above, we can see:\
+The plot of residuals does not show a constant trend, and it fluctuates around 0. (though with some outliers) \
+For the ACF plot, there are very few spikes out of the required limits, meaning that the residuals almost have no autocorrelation.\
+The histogram shows that the residuals are normally distributed.\ 
+The p-value of Ljung-Box test is 0.4721 > 0.05, so we fail reject $H_0$ and conclude that there are no obvious correlation between residuals.\
+The model with auto correlated errors (**Model 2.1**) satisfy the white noise assumption of following $N(0, \sigma^2_w)$, the residual diagnostics perform much better than the original (**Model 2**).
+
+
+# Results
+## Comparison and evaluation
+* AIC and BIC
+Extract the AIC and BIC values from each model, which are automatically calculated when you fit an ARIMA model using the arima or auto.arima function from the forecast package. Lower values of AIC and BIC generally indicate a better model fit with a good balance of model complexity and goodness of fit.
+```{r echo=FALSE}
+# Assuming model_1_1 and model_2_1 are already fitted ARIMA models
+# Print AIC and BIC for Model 1.1
+cat(sprintf("Model 1.1 - AIC: %.2f, BIC: %.2f\n", AIC(model_1_1), BIC(model_1_1)))
+
+# Print AIC and BIC for Model 2.1
+cat(sprintf("Model 2.1 - AIC: %.2f, BIC: %.2f\n", AIC(model_2_1), BIC(model_2_1)))
+```
+* AIC Comparison:\
+Model 2.1 has a lower AIC (-6305.717) compared to Model 1.1 (-6303.15). This suggests that Model 2.1 has a slightly better fit to the data considering the trade-off between goodness of fit and model complexity.\
+* BIC Comparison:\
+Similarly, Model 2.1 has a lower BIC (-6285.564) compared to Model 1.1 (-6282.996). This indicates that when the penalty for the number of parameters is considered more stringently, Model 2.1 still performs better, suggesting it might be the more appropriate model among the two.\
+Then we look at the residuals of each model to check for any patterns or autocorrelation that might suggest model inadequacies.\
+* Residual Analysis: Both models seem to perform well in terms of residual analysis including Residual plot, ACF plot, histogram and Ljung-Box test.\
+Based on the overall statistical metrics, including the Box-Ljung test results, AIC, and BIC values, **Model 2.1** might be preferred slightly over Model 1.1, although both models exhibit robust statistical properties.\
+
+## Pediction
+```{r echo=FALSE}
+model_2 <- lm(mid ~ date + ask + volume, data = data)
+future_dates <- seq(max(data$date), by="day", length.out=6)[-1]  
+future_volume <- tail(data$volume, 5)  
+future_ask <- tail(data$ask, 5)
+
+future_data_2 <- data.frame(date=future_dates, ask=future_ask, volume=future_volume)
+predicted_mid_2 <- predict(model_2, newdata=future_data_2)
+arima_resid_2 <- auto.arima(resid(model_2))
+resid_forecast_2 <- forecast(arima_resid_2, h=5)
+final_forecast_2 <- predicted_mid_2 + resid_forecast_2$mean
+plot(final_forecast_2, type='l', col='red', main="Final Forecast Model 2.1", ylab="Mid Value", xlab="Date")
+```
+
+```{r echo=FALSE}
+x_train2 <- cbind(data$date[-c((nrow(data)-4):nrow(data))], 
+                                          data$ask[-c((nrow(data)-4):nrow(data))], 
+                                          data$volume[-c((nrow(data)-4):nrow(data))])
+
+x_test2 <- cbind(data$date[c((nrow(data)-4):nrow(data))], 
+                                          data$ask[c((nrow(data)-4):nrow(data))], 
+                                          data$volume[c((nrow(data)-4):nrow(data))])
+y_train2 <- data$mid[-c((nrow(data)-4):nrow(data))] 
+y_test2 <- data$mid[c((nrow(data)-4):nrow(data))]
+
+
+model_2_1 = sarima(y_train2, 0, 1, 1, details = FALSE,xreg = x_train2)
+
+y_pred2 = sarima.for(as.ts(data$mid[-c((nrow(data)-4):nrow(data))]),n.ahead = 5, 
+                             0, 1, 1, 
+                             xreg = x_train2,
+                             newxreg = x_test2)
+
+```
+
+
+# Discussion
+Cryptocurrencies are volatile and unpredictable, so it's challenging for our model to fully capture the values when the market or policy changes a lot. This high volatility is from their immature market structure, speculative trading, and frequent regulatory changes. Although our models incorporate predictive factors like trading volume and buying/selling prices, their predictive power is limited due to external market forces. Thus, sudden, large-scale events such as regulatory announcements can skew predictions and distort the exchange rate.\
+
+Moreover, the short data period confines our analysis to short-term fluctuations. Identifying and quantifying seasonal or annual patterns is challenging. Cryptocurrency markets often exhibit patterns aligned with broader economic and technological cycles. While our models effectively analyze immediate movements, predicting cyclical changes that may emerge over longer periods is difficult.\
+
+Despite these challenges, this analysis offers valuable insights into which factors influence the ZRX to USD exchange rate, providing a foundation for predicting future trends and making more informed investment decisions.It is crucial to remain cautious and continuously refine models with more data and variables to improve predictive accuracy.\
+
+\newpage
+
+# References
+
+::: {#refs custom-style="Bibliography"}
+:::
+
+# Appendix (Optional)
+
+Any R codes or less important R outputs that you wanted to keep- can go in here.
+
+To clarify the **Regression with autocorrelated residual** part, we provide code for how we obtain **Model 1.1** and **Model 2.1**
+
+```{r echo=TRUE}
+model_1_1 = arima(data$mid, c(0, 1, 1), xreg = cbind(data$date, data$bid, data$volume))
+```
+
+```{r echo=TRUE}
+model_2_1 = arima(data$mid, c(0, 1, 1), xreg = cbind(data$date, data$ask, data$volume))
+```
+
